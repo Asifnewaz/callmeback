@@ -1,21 +1,22 @@
 #!/bin/bash
 # ╔══════════════════════════════════════════════════════════════╗
-# ║        callmeback  —  Task Done Notifier  v2.2              ║
+# ║        callmeback  —  Task Done Notifier  v2.3              ║
 # ╚══════════════════════════════════════════════════════════════╝
 #
 # Sounds: chime | bell | pop | ping | soft | water | whoosh | gentle
 #
 # Usage:
-#   --sound  <name>               Change sound
-#   --sound  custom /path/file    Use your own file
-#   --repeat on|off               Toggle repeat mode
-#   --limit  <n>                  Max repeat beeps (default: 3)
-#   --interval <seconds>          Seconds between repeats
+#   --sound    <name>             Change sound
+#   --sound    custom /path/file  Use your own file
+#   --repeat   on|off             Toggle repeat mode
+#   --limit    <n>                Max repeat beeps (default: 3)
+#   --interval <seconds>          Seconds between repeats (default: 5)
 #   --status                      Show current config
 #   --help                        Show this help
 
 CONFIG_FILE="$HOME/.claude/beep-config.sh"
 PID_FILE="$HOME/.claude/beep-repeat.pid"
+ENGINE="$HOME/.claude/sound_engine.py"
 
 write_default_config() {
   cat > "$CONFIG_FILE" <<'DEFAULTS'
@@ -29,8 +30,6 @@ DEFAULTS
 }
 
 [[ -f "$CONFIG_FILE" ]] || write_default_config
-
-# Migrate old configs that don't have BEEP_LIMIT yet
 grep -q "^BEEP_LIMIT=" "$CONFIG_FILE" || echo 'BEEP_LIMIT="3"' >> "$CONFIG_FILE"
 
 # shellcheck source=/dev/null
@@ -98,122 +97,36 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# ── Python Sound Generator ───────────────────────────────────────
-# BUG FIX: Write sound name to a temp file so the Python heredoc
-# (which uses single quotes = no variable expansion) can read it.
-play_via_python() {
-  local SOUND_NAME="$1"
-  local SOUND_FILE
-  SOUND_FILE=$(mktemp /tmp/cmb_sound_XXXXXX)
-  echo "$SOUND_NAME" > "$SOUND_FILE"
-
-  python3 - "$SOUND_FILE" <<'PYEOF'
-import struct, wave, tempfile, os, subprocess, math, sys
-
-# Read sound name from the temp file passed as argument
-sound_file = sys.argv[1] if len(sys.argv) > 1 else ""
-sound_type = "gentle"
-if sound_file and os.path.exists(sound_file):
-    with open(sound_file) as f:
-        sound_type = f.read().strip()
-    os.unlink(sound_file)
-
-rate = 44100
-
-def sine(freq, dur, vol=0.6):
-    n, fade = int(rate * dur), int(rate * 0.015)
-    out = []
-    for i in range(n):
-        s = math.sin(2 * math.pi * freq * i / rate)
-        if i < fade:       s *= i / fade
-        elif i > n - fade: s *= (n - i) / fade
-        out.append(int(32767 * vol * s))
-    return out
-
-def sine_exp(freq, dur, vol=0.6, decay=6.0):
-    n = int(rate * dur)
-    return [int(32767 * vol * math.exp(-decay * i / n) *
-                math.sin(2 * math.pi * freq * i / rate)) for i in range(n)]
-
-def silence(dur):
-    return [0] * int(rate * dur)
-
-sounds = {
-    "chime":  sine(523, 0.18) + sine(659, 0.28),
-    "bell":   sine(440, 0.25, 0.8),
-    "pop":    sine(220, 0.12, 0.5) + sine(180, 0.08, 0.3),
-    "ping":   sine(880, 0.15, 0.5) + sine(1047, 0.2, 0.4),
-    "soft":   sine(330, 0.20, 0.28) + sine(392, 0.25, 0.18),
-    "water":  sine_exp(1200, 0.35, 0.55, 7.0) + silence(0.04) + sine_exp(900, 0.28, 0.3, 9.0),
-    "whoosh": [
-        int(32767 * 0.3 *
-            math.sin(2 * math.pi * (300 + 400 * (i / int(rate * 0.4))) * i / rate) *
-            math.exp(-3.5 * i / int(rate * 0.4)))
-        for i in range(int(rate * 0.4))
-    ],
-    "gentle": (sine_exp(528, 0.30, 0.35, 5.0) + silence(0.06) +
-               sine_exp(660, 0.30, 0.28, 5.5) + silence(0.06) +
-               sine_exp(792, 0.35, 0.22, 6.0)),
-}
-
-samples = sounds.get(sound_type, sounds["gentle"])
-
-def to_bytes(s):
-    return b"".join(struct.pack("<h", max(-32767, min(32767, v))) for v in s)
-
-with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-    path = f.name
-    with wave.open(f, "w") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(rate)
-        wf.writeframes(to_bytes(samples))
-
-played = False
-for cmd in [
-    ["afplay", path],
-    ["paplay", path],
-    ["aplay", "-q", path],
-    ["pw-play", path],
-    ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path],
-]:
-    try:
-        if subprocess.run(cmd, capture_output=True, timeout=5).returncode == 0:
-            played = True
-            break
-    except:
-        continue
-
-os.unlink(path)
-sys.exit(0 if played else 1)
-PYEOF
-}
-
 # ── Play Sound ───────────────────────────────────────────────────
+# mode: "alert" (full, task done) or "reminder" (softer, repeat beep)
 play_sound() {
-  # Custom file
-  if [[ "$BEEP_SOUND" == "custom" && -f "$BEEP_CUSTOM_FILE" ]]; then
+  local mode="${1:-alert}"
+
+  # Custom file — only for alert, reminder always uses engine
+  if [[ "$BEEP_SOUND" == "custom" && "$mode" == "alert" && -f "$BEEP_CUSTOM_FILE" ]]; then
     for player in afplay paplay pw-play; do
       command -v "$player" &>/dev/null && "$player" "$BEEP_CUSTOM_FILE" 2>/dev/null && return
     done
     command -v aplay &>/dev/null && aplay -q "$BEEP_CUSTOM_FILE" 2>/dev/null && return
   fi
 
-  # macOS system sounds for classic presets — Python for soft ones
+  # Use the shared sound engine (guarantees same sound as installer preview)
+  if command -v python3 &>/dev/null && [[ -f "$ENGINE" ]]; then
+    if [[ "$mode" == "reminder" ]]; then
+      python3 "$ENGINE" "$BEEP_SOUND" reminder && return
+    else
+      python3 "$ENGINE" "$BEEP_SOUND" && return
+    fi
+  fi
+
+  # macOS fallback if engine is missing
   if [[ "$(uname)" == "Darwin" ]]; then
     declare -A MAC_MAP=([chime]="Glass" [bell]="Ping" [pop]="Pop" [ping]="Tink")
-    if [[ -n "${MAC_MAP[$BEEP_SOUND]:-}" ]]; then
-      afplay "/System/Library/Sounds/${MAC_MAP[$BEEP_SOUND]}.aiff" 2>/dev/null && return
-    fi
-    # soft/water/whoosh/gentle fall through to Python below
+    local snd="${MAC_MAP[$BEEP_SOUND]:-Glass}"
+    afplay "/System/Library/Sounds/${snd}.aiff" 2>/dev/null && return
   fi
 
-  # Python generator — works on macOS + Linux, carries the selected sound name correctly
-  if command -v python3 &>/dev/null; then
-    play_via_python "$BEEP_SOUND" && return
-  fi
-
-  # Last resort: system sound files on Linux
+  # Linux fallback
   if command -v paplay &>/dev/null; then
     for f in /usr/share/sounds/freedesktop/stereo/complete.oga \
               /usr/share/sounds/freedesktop/stereo/bell.oga; do
@@ -226,8 +139,6 @@ play_sound() {
 
 # ── Repeat Loop ──────────────────────────────────────────────────
 stop_repeat() {
-  # BUG FIX: split into two separate steps so rm always runs
-  # regardless of whether kill succeeded
   if [[ -f "$PID_FILE" ]]; then
     local OLD_PID
     OLD_PID=$(cat "$PID_FILE" 2>/dev/null)
@@ -239,27 +150,17 @@ stop_repeat() {
 start_repeat_loop() {
   stop_repeat
   (
-    # BUG FIX: save the subshell PID, not the parent $$
     echo $BASHPID > "$PID_FILE"
-
     local count=0
-
     while true; do
       sleep "$BEEP_INTERVAL"
-
-      # Re-read config — picks up live changes to repeat/limit/interval
       source "$CONFIG_FILE" 2>/dev/null
-
-      # Stop if repeat was toggled off
       [[ "$BEEP_REPEAT" != "on" ]] && break
-
-      # Stop if we've hit the beep limit
       count=$(( count + 1 ))
       [[ "$count" -gt "$BEEP_LIMIT" ]] && break
-
-      play_sound
+      # Reminder beep — same sound, noticeably softer/shorter
+      play_sound reminder
     done
-
     rm -f "$PID_FILE"
   ) &
   disown
@@ -267,5 +168,5 @@ start_repeat_loop() {
 
 # ── Main ─────────────────────────────────────────────────────────
 stop_repeat
-play_sound
+play_sound alert
 [[ "$BEEP_REPEAT" == "on" ]] && start_repeat_loop
