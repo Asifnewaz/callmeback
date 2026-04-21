@@ -111,14 +111,21 @@ echo -e "  ${CYAN}7)${RESET} pop     — Short low pop"
 echo -e "  ${CYAN}8)${RESET} ping    — Crisp high ping"
 echo ""
 
-declare -A SOUND_MAP=([1]="gentle" [2]="soft" [3]="water" [4]="whoosh"
-                      [5]="chime"  [6]="bell"  [7]="pop"   [8]="ping")
 CHOSEN_SOUND=""
+
+# bash 3.2 compatible (macOS default shell has no associative arrays)
+number_to_sound() {
+  case "$1" in
+    1) echo "gentle" ;; 2) echo "soft"  ;; 3) echo "water" ;; 4) echo "whoosh" ;;
+    5) echo "chime"  ;; 6) echo "bell"  ;; 7) echo "pop"   ;; 8) echo "ping"   ;;
+    *) echo "" ;;
+  esac
+}
 
 while true; do
   ask SOUND_CHOICE "  Enter number [1-8]: "
   echo ""
-  CHOSEN_SOUND="${SOUND_MAP[$SOUND_CHOICE]:-}"
+  CHOSEN_SOUND=$(number_to_sound "$SOUND_CHOICE")
   if [[ -z "$CHOSEN_SOUND" ]]; then
     warn "Please enter a number between 1 and 8."; echo ""; continue
   fi
