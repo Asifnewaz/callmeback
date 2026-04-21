@@ -119,10 +119,14 @@ play_sound() {
     fi
   fi
 
-  # macOS fallback if engine is missing
+  # macOS fallback if engine is missing (bash 3.2 compatible, no associative arrays)
   if [[ "$(uname)" == "Darwin" ]]; then
-    declare -A MAC_MAP=([chime]="Glass" [bell]="Ping" [pop]="Pop" [ping]="Tink")
-    local snd="${MAC_MAP[$BEEP_SOUND]:-Glass}"
+    local snd
+    case "$BEEP_SOUND" in
+      chime) snd="Glass" ;; bell) snd="Ping" ;;
+      pop)   snd="Pop"   ;; ping) snd="Tink" ;;
+      *)     snd="Glass" ;;
+    esac
     afplay "/System/Library/Sounds/${snd}.aiff" 2>/dev/null && return
   fi
 
