@@ -22,7 +22,7 @@
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Asifnewaz/claude-beep/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Asifnewaz/callmeback/main/install.sh | bash
 ```
 
 The installer will:
@@ -35,7 +35,7 @@ The installer will:
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Asifnewaz/claude-beep/main/install.sh | bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/Asifnewaz/callmeback/main/install.sh | bash -s -- --uninstall
 ```
 
 ---
